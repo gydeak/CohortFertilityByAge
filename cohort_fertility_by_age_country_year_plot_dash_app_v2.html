@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="hu">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Kohorsz Termékenység Dashboard</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/plotly.js/2.26.0/plotly.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        h2 {
+            color: #333;
+            margin-bottom: 20px;
+        }
+        .control-section {
+            margin-bottom: 20px;
+        }
+        label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: bold;
+            color: #555;
+        }
+        select {
+            width: 100%;
+            max-width: 500px;
+            padding: 8px;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+        .age-checklist {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 15px;
+            margin-top: 10px;
+        }
+        .age-checkbox {
+            display: flex;
+            align-items: center;
+        }
+        .age-checkbox input {
+            margin-right: 5px;
+        }
+        .button-group {
+            margin-top: 10px;
+            display: flex;
+            gap: 10px;
+        }
+        button {
+            padding: 8px 16px;
+            background-color: #007bff;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        #chart {
+            margin-top: 20px;
+        }
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #666;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h2>Adott életkorú nők gyermekvállalásának változása</h2>
+        
+        <div class="control-section">
+            <label for="country-select">Ország(ok) kiválasztása:</label>
+            <select id="country-select" multiple size="5"></select>
+        </div>
+
+        <div class="control-section">
+            <label>Életkorok kijelölése/kikapcsolása:</label>
+            <div id="age-checklist" class="age-checklist"></div>
+            <div class="button-group">
+                <button id="select-all">Összes kijelölése</button>
+                <button id="deselect-all">Összes törlése</button>
+            </div>
+        </div>
+
+        <div id="chart"></div>
+        <div id="loading" class="loading">Adatok betöltése...</div>
+    </div>
+
+    <script>
+        let data = [];
+        let countries = [];
+        let ages = [];
+        let minYear, maxYear;
+
+        // CSV fájl betöltése
+        async function loadData() {
+            try {
+                const response = await fetch('cohort_fertility_by_age_year_country.csv');
+                const csvText = await response.text();
+                
+                Papa.parse(csvText, {
+                    header: true,
+                    dynamicTyping: true,
+                    skipEmptyLines: true,
+                    complete: function(results) {
+                        // Adatok szűrése és tisztítása
+                        data = results.data.filter(row => 
+                            row.births_per_woman !== null && 
+                            row.births_per_woman !== undefined &&
+                            row.TIME_PERIOD !== null &&
+                            row.TIME_PERIOD !== undefined
+                        );
+
+                        // Országok és életkorok gyűjtése
+                        const countrySet = new Set();
+                        const ageSet = new Set();
+                        const years = [];
+
+                        data.forEach(row => {
+                            countrySet.add(row.geo);
+                            ageSet.add(row.age);
+                            years.push(row.TIME_PERIOD);
+                        });
+
+                        countries = Array.from(countrySet).sort();
+                        ages = Array.from(ageSet).sort((a, b) => {
+                            const numA = parseInt(a.substring(1));
+                            const numB = parseInt(b.substring(1));
+                            return numA - numB;
+                        });
+
+                        minYear = Math.min(...years);
+                        maxYear = Math.max(...years);
+
+                        initializeControls();
+                        updateChart();
+                        document.getElementById('loading').style.display = 'none';
+                    }
+                });
+            } catch (error) {
+                console.error('Hiba az adatok betöltésekor:', error);
+                document.getElementById('loading').innerHTML = 'Hiba: Az adatok nem tölthetők be. Győződj meg róla, hogy a CSV fájl ugyanabban a mappában van.';
+            }
+        }
+
+        function initializeControls() {
+            // Országok dropdown
+            const countrySelect = document.getElementById('country-select');
+            countries.forEach(country => {
+                const option = document.createElement('option');
+                option.value = country;
+                option.textContent = country;
+                if (country === 'HU') option.selected = true;
+                countrySelect.appendChild(option);
+            });
+
+            // Életkor checkboxok
+            const ageChecklist = document.getElementById('age-checklist');
+            ages.forEach(age => {
+                const div = document.createElement('div');
+                div.className = 'age-checkbox';
+                
+                const checkbox = document.createElement('input');
+                checkbox.type = 'checkbox';
+                checkbox.id = `age-${age}`;
+                checkbox.value = age;
+                checkbox.checked = true;
+                checkbox.addEventListener('change', updateChart);
+                
+                const label = document.createElement('label');
+                label.htmlFor = `age-${age}`;
+                label.textContent = age;
+                label.style.cursor = 'pointer';
+                label.style.fontWeight = 'normal';
+                
+                div.appendChild(checkbox);
+                div.appendChild(label);
+                ageChecklist.appendChild(div);
+            });
+
+            // Event listeners
+            countrySelect.addEventListener('change', updateChart);
+            document.getElementById('select-all').addEventListener('click', () => {
+                ages.forEach(age => {
+                    document.getElementById(`age-${age}`).checked = true;
+                });
+                updateChart();
+            });
+            document.getElementById('deselect-all').addEventListener('click', () => {
+                ages.forEach(age => {
+                    document.getElementById(`age-${age}`).checked = false;
+                });
+                updateChart();
+            });
+        }
+
+        function updateChart() {
+            const selectedCountries = Array.from(document.getElementById('country-select').selectedOptions)
+                .map(option => option.value);
+            
+            const selectedAges = ages.filter(age => 
+                document.getElementById(`age-${age}`).checked
+            );
+
+            if (selectedCountries.length === 0 || selectedAges.length === 0) {
+                Plotly.purge('chart');
+                return;
+            }
+
+            const traces = [];
+
+            selectedAges.forEach(age => {
+                selectedCountries.forEach(country => {
+                    const filteredData = data.filter(row => 
+                        row.geo === country && row.age === age
+                    );
+
+                    if (filteredData.length > 0) {
+                        traces.push({
+                            x: filteredData.map(row => row.TIME_PERIOD),
+                            y: filteredData.map(row => row.births_per_woman),
+                            mode: 'lines+markers',
+                            name: `${country}-${age}`,
+                            line: { width: 2 },
+                            hovertemplate: `${country}, életkor: ${age}<br>Év: %{x}<br>Gyermek/nő: %{y:.2f}<extra></extra>`
+                        });
+                    }
+                });
+            });
+
+            const layout = {
+                xaxis: {
+                    title: '',
+                    range: [minYear, maxYear],
+                    rangeselector: {
+                        buttons: [
+                            { count: 6, label: '6 év', step: 'year', stepmode: 'backward' },
+                            { count: 12, label: '12 év', step: 'year', stepmode: 'backward' },
+                            { count: 24, label: '24 év', step: 'year', stepmode: 'backward' },
+                            { label: 'Összes', step: 'all' }
+                        ]
+                    },
+                    rangeslider: { visible: true },
+                    type: 'linear'
+                },
+                yaxis: {
+                    title: 'Egy főre jutó születésszám'
+                },
+                hovermode: 'x unified',
+                template: 'plotly_white',
+                height: 600,
+                margin: { l: 60, r: 40, t: 40, b: 40 },
+                legend: {
+                    title: { text: 'Életkor' }
+                }
+            };
+
+            const config = {
+                responsive: true,
+                displayModeBar: true,
+                displaylogo: false
+            };
+
+            Plotly.newPlot('chart', traces, layout, config);
+        }
+
+        // Adatok betöltése az oldal betöltésekor
+        loadData();
+    </script>
+</body>
+</html>
